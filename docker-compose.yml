@@ -1,0 +1,56 @@
+version: '3.9'
+
+services:
+  mysql_container:
+    image: mysql/mysql-server:latest
+    container_name: mysql_container
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: 12345678
+      MYSQL_DATABASE: urls
+      MYSQL_ROOT_HOST: '%'
+    ports:
+      - "3308:3306"
+    networks:
+      - base
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 30s
+      retries: 5
+      timeout: 20s
+
+  ubuntu:
+    image: ubuntu:latest
+    container_name: ubuntu1
+    command: sleep infinity
+    networks:
+      - base
+    volumes:
+      - .:/data
+    stdin_open: true
+    tty: true
+  
+  web:
+    build: .
+    container_name: web1
+    environment:
+      - MYSQL_HOST=mysql_container
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=12345678
+      - MYSQL_DATABASE=urls
+    volumes:
+      - .:/app
+    working_dir: /app
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mysql_container
+    networks:
+      - base
+    entrypoint: ["/bin/sh", "-c", "while true; do sleep 30; done"]
+
+networks:
+  base:
