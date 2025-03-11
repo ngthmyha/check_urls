@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y \
 # Add the Deadsnakes repository for newer Python versions
 RUN add-apt-repository ppa:deadsnakes/ppa \
     && apt-get update
+RUN apt-get update && apt-get install -y iproute2
 
 # Set Python 3 as the default
 RUN ln -sf /usr/bin/python3 /usr/bin/python
@@ -31,6 +32,7 @@ COPY . /app
 # Khởi tạo Poetry nếu chưa có pyproject.toml
 RUN test -f pyproject.toml || poetry init -n --dependency scrapy --dependency pymysql --dependency pandas
 RUN poetry install --no-root
+
 
 # Copy dependency management files
 COPY pyproject.toml poetry.lock /app/
