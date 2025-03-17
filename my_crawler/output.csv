@@ -19313,3 +19313,6 @@ id,url,status,redirect_url,is_domain_for_sale,is_domain_expired,is_domain_parkin
 2875597,http://e-ways.jp,200,,False,False,False,False,False,False
 4548445,http://e-wei.co.jp/,200,,False,False,False,False,False,False
 2140008,http://e-revival.com,ERROR,,,,,,,
+2297804,http://e-yamachu.jp/,200,,False,False,True,False,False,False
+332798,http://e-wave8362.com/,200,,False,False,True,False,False,False
+1163046,http://e-yahata.co.jp/,200,,False,False,False,False,False,False

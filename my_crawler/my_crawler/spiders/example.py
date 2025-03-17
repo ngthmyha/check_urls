@@ -48,7 +48,6 @@ class ExampleSpider(scrapy.Spider):
         self.connect_urls = set()
 
     def start_requests(self):
-        """ Gửi request đến danh sách URL lấy từ database """
         for item in self.start_urls:
             url = item["url"].strip()
             if url.startswith('http://.') or url.startswith('https://.'):
@@ -61,7 +60,6 @@ class ExampleSpider(scrapy.Spider):
             )
 
     def closed(self, reason):
-        """ Đóng kết nối database và file CSV khi Scrapy kết thúc """
         self.csv_file.close()
         self.db.close()
 
@@ -152,7 +150,6 @@ class ExampleSpider(scrapy.Spider):
         self.csv_file.flush()
 
     def handle_error(self, failure):
-        """ Xử lý lỗi khi request thất bại (GIỮ NGUYÊN CODE CŨ) """
         request = failure.request
         record_id = request.meta.get("id", None)
         status = "ERROR"
@@ -276,7 +273,6 @@ class ExampleSpider(scrapy.Spider):
         self.log_error(record_id, original_url, status)
 
     def get_error_status(self, failure):
-        """ Xác định loại lỗi từ failure """
         failure_msg = str(failure.value).lower()
         print(f"❌ hhhhhh: {failure_msg}")
         if failure.check(error.DNSLookupError):
@@ -308,7 +304,6 @@ class ExampleSpider(scrapy.Spider):
         return "ERROR"
 
     def log_error(self, record_id, url, status):
-        """ Ghi lỗi vào CSV """
         self.csv_writer.writerow([record_id, url, status, None, None, None, None, None, None, None])
         self.csv_file.flush()
         # print(f"❌ Logged: {url} -> {status}")
