@@ -21,29 +21,13 @@ class ExampleSpider(scrapy.Spider):
         super().__init__(*args, **kwargs)
 
         # Kết nối database
-        self.db = pymysql.connect(
-            host="mysql_container",
-            user="root",
-            password="12345678",
-            database="urls"
-        )
-        self.cursor = self.db.cursor()
-
-        # Lấy danh sách URL từ database
-        self.cursor.execute("SELECT id, url FROM company_list WHERE url IS NOT NULL AND url != '' AND url NOT LIKE 'NA'")
-        self.start_urls = [{"id": row[0], "url": str(row[1]).strip()} for row in self.cursor.fetchall()]
+        self.get_urls()
 
         if not self.start_urls:
             self.log("Không có URL nào để crawl.", level=scrapy.log.ERROR)
 
-        # Mở file CSV
-        self.csv_file = open("output.csv", "w", newline="", encoding="utf-8")
-        self.csv_writer = csv.writer(self.csv_file)
-        self.csv_writer.writerow([
-            "id", "url", "status", "redirect_url",
-            "is_domain_for_sale", "is_domain_expired", "is_domain_parking", "is_domain_managed",
-            "is_seo_spam", "is_admin_panel"
-        ])
+        self.write_title_csv()
+        
         self.visited_urls = set()
         self.connect_urls = set()
 
@@ -142,135 +126,93 @@ class ExampleSpider(scrapy.Spider):
             pass
 
         # Ghi dữ liệu vào CSV
-        self.csv_writer.writerow([
+        self.log_csv(
             record_id, original_url, status, redirect_url,
             is_domain_for_sale, is_domain_expired, is_domain_parking, is_domain_managed,
             is_seo_spam, is_admin_panel
-        ])
+        )
         self.csv_file.flush()
 
     def handle_error(self, failure):
         request = failure.request
-        record_id = request.meta.get("id", None)
-        status = "ERROR"
+        record_id = request.meta.get("id")
         original_url = request.meta.get("original_url", request.url)
-
         status = self.get_error_status(failure)
-        proxy = "http://133.232.93.66:80"
+        proxy = "http://8.221.141.88:5631"
 
+        # Handle HTTP error
         if isinstance(failure.value, scrapy.spidermiddlewares.httperror.HttpError):
-            status = failure.value.response.status
-            self.log_error(record_id, original_url, status)
+            self.log_csv(record_id, original_url, failure.value.response.status)
             return
 
-        if status in ["CONNECT_ERROR", "CONNECTION_REFUSED"]:
-            if request.url not in self.connect_urls:
-                self.connect_urls.add(request.url)
-                yield scrapy.Request(
-                    request.url,
-                    callback=self.parse,
-                    errback=self.handle_error,
-                    meta={
-                        "original_url": original_url,
-                        "id": record_id,
-                        "redirect_times": 0, 
-                        "proxy": proxy,
-                    },
-                    dont_filter=True,
-                )
-                return
-            elif request.url.startswith("https://") and request.url.replace("https://", "http://") not in self.connect_urls:
-                http_url = request.url.replace("https://", "http://")
-                self.connect_urls.add(http_url)
-                yield scrapy.Request(
-                    http_url,
-                    callback=self.parse,
-                    errback=self.handle_error,
-                    meta={
-                        "original_url": original_url,
-                        "id": record_id,
-                        "redirect_times": 0, 
-                        "proxy": proxy,
-                    },
-                    dont_filter=True,
-                )
-                return
-            elif request.url.startswith("http://") and request.url.replace("http://", "https://") not in self.connect_urls:
-                https_url = request.url.replace("http://", "https://")
-                self.connect_urls.add(https_url)
-                yield scrapy.Request(
-                    https_url,
-                    callback=self.parse,
-                    errback=self.handle_error,
-                    meta={
-                        "original_url": original_url,
-                        "id": record_id,
-                        "redirect_times": 0, 
-                        "proxy": proxy,
-                    },
-                    dont_filter=True,
-                )
+        # Handle connection errors
+        if status in {"CONNECT_ERROR", "CONNECTION_REFUSED"}:
+            if self.retry_request(request, original_url, record_id, proxy):
                 return
 
-        if status == "SSL_ERROR":
-            if request.url.startswith("https://"):
-                http_url = request.url.replace("https://", "http://")
-                http_url = re.sub(r"http://+", "http://", http_url)
-                if http_url not in self.visited_urls:
-                    self.visited_urls.add(http_url)
-                    yield scrapy.Request(
-                        http_url,
-                        callback=self.parse,
-                        errback=self.handle_error,
-                        meta={"original_url": original_url, "id": record_id, "redirect_times": 0, },
-                        dont_filter=True,
-                    )
-                    return
-        
-        if status == "DNS_ERROR":
-            parsed_url = re.match(r"(https?://)([^/]+)(/?.*)", request.url)
-            if parsed_url:
-                scheme, domain, path = parsed_url.groups()
-                
-                # Nếu chưa có 'www.', thử thêm vào
-                if not domain.startswith("www."):
-                    new_url = f"{scheme}www.{domain}{path}"
-                    if new_url not in self.visited_urls:
-                        self.visited_urls.add(new_url)
-                        yield scrapy.Request(
-                            new_url,
-                            callback=self.parse,
-                            errback=self.handle_error,
-                            meta={"original_url": original_url, "id": record_id},
-                            dont_filter=True,
-                        )
-                        return
+        # Handle SSL errors
+        if status == "SSL_ERROR" and request.url.startswith("https://"):
+            http_url = re.sub(r"https://+", "http://", request.url)
+            if self.try_new_url(http_url, original_url, record_id):
+                return
 
-        if request.url.startswith("http://") or request.url.startswith("https://"):
-            # Phân tích URL thành các phần
-            parsed_url = re.match(r"(https?://)([^/]+)(/?.*)", request.url)
-            if parsed_url:
-                scheme, domain, path = parsed_url.groups()
-                
-                # Nếu domain không có "www.", thêm vào
-                if not domain.startswith("www."):
-                    domain = "www." + domain
+        # Handle DNS errors
+        if status == "DNS_ERROR" and self.handle_dns_error(request.url, original_url, record_id):
+            return
 
-                # Chuyển sang HTTPS nếu đang dùng HTTP
-                https_url = f"https://{domain}{path}"
-                
-                if https_url not in self.visited_urls:
-                    self.visited_urls.add(https_url)
-                    yield scrapy.Request(
-                        https_url,
-                        callback=self.parse,
-                        errback=self.handle_error,
-                        meta={"original_url": original_url, "id": record_id},
-                        dont_filter=True,  # Đảm bảo Scrapy không bỏ qua request nàym
-                    )
-                    return
+        # General URL modification: add 'www.' and enforce HTTPS
+        if self.ensure_www_and_https(request.url, original_url, record_id):
+            return
 
-        self.log_error(record_id, original_url, status)
+        self.log_csv(record_id, original_url, status)
+
+    def retry_request(self, request, original_url, record_id, proxy):                                                            
+        variations = [
+            request.url,
+            request.url.replace("https://", "http://") if request.url.startswith("https://") else None,
+            request.url.replace("http://", "https://") if request.url.startswith("http://") else None
+        ]
+
+        for url in filter(None, variations):
+            if url not in self.connect_urls:
+                self.connect_urls.add(url)
+                yield scrapy.Request(
+                    url, callback=self.parse, errback=self.handle_error,
+                    meta={"original_url": original_url, "id": record_id, "redirect_times": 0, "proxy": proxy},
+                    dont_filter=True
+                )
+                return True
+        return False
+
+    def try_new_url(self, new_url, original_url, record_id):
+        if new_url not in self.visited_urls:
+            self.visited_urls.add(new_url)
+            yield scrapy.Request(
+                new_url, callback=self.parse, errback=self.handle_error,
+                meta={"original_url": original_url, "id": record_id, "redirect_times": 0},
+                dont_filter=True
+            )
+            return True
+        return False
+
+    def handle_dns_error(self, url, original_url, record_id):
+        match = re.match(r"(https?://)([^/]+)(/?.*)", url)
+        if match:
+            scheme, domain, path = match.groups()
+            if not domain.startswith("www."):
+                new_url = f"{scheme}www.{domain}{path}"
+                return self.try_new_url(new_url, original_url, record_id)
+        return False
+
+    def ensure_www_and_https(self, url, original_url, record_id):
+        match = re.match(r"(https?://)?([^/]+)(/?.*)", url)
+        if match:
+            scheme, domain, path = match.groups()
+            if not domain.startswith("www."):
+                domain = "www." + domain
+            https_url = f"https://{domain}{path}"
+            return self.try_new_url(https_url, original_url, record_id)
+        return False
 
     def get_error_status(self, failure):
         failure_msg = str(failure.value).lower()
@@ -303,7 +245,43 @@ class ExampleSpider(scrapy.Spider):
 
         return "ERROR"
 
-    def log_error(self, record_id, url, status):
-        self.csv_writer.writerow([record_id, url, status, None, None, None, None, None, None, None])
+    def log_csv(self, 
+                  record_id, 
+                  original_url, 
+                  status, 
+                  redirect_url = None, 
+                  is_domain_for_sale = False, 
+                  is_domain_expired = False, 
+                  is_domain_parking = False, 
+                  is_domain_managed = False, 
+                  is_seo_spam = False, 
+                  is_admin_panel = False):
+        self.csv_writer.writerow([
+            record_id, original_url, status, redirect_url,
+            is_domain_for_sale, is_domain_expired, is_domain_parking, is_domain_managed,
+            is_seo_spam, is_admin_panel
+        ])
         self.csv_file.flush()
-        # print(f"❌ Logged: {url} -> {status}")
+
+    def get_urls(self):
+        self.db = pymysql.connect(
+            host="mysql_container",
+            user="root",
+            password="12345678",
+            database="urls"
+        )
+        self.cursor = self.db.cursor()
+
+        # Lấy danh sách URL từ database
+        self.cursor.execute("SELECT id, url FROM company_list WHERE url IS NOT NULL AND url != '' AND url NOT LIKE 'NA'")
+        self.start_urls = [{"id": row[0], "url": str(row[1]).strip()} for row in self.cursor.fetchall()]
+    
+    def write_title_csv(self):
+        # Mở file CSV
+        self.csv_file = open("output.csv", "w", newline="", encoding="utf-8")
+        self.csv_writer = csv.writer(self.csv_file)
+        self.csv_writer.writerow([
+            "id", "url", "status", "redirect_url",
+            "is_domain_for_sale", "is_domain_expired", "is_domain_parking", "is_domain_managed",
+            "is_seo_spam", "is_admin_panel"
+        ])
